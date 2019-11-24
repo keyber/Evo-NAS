@@ -64,6 +64,7 @@ class ControllerNetwork(nn.Module):
         return all_decision
 
 
+
 class NetworkTester():
     def __init__(self):
         #Définition des différentes transformations que l'on effectue sur les images
@@ -105,8 +106,30 @@ class NetworkTester():
         return accuracy(net(self.testset.train),self.testset.test)
 
 
-def update_controler(controler,reward):
-    pass
+def update_controler(controler,reward, log_probs):
+    nb_hyperparams = len(log_probs)
+    rewards = [reward]*nb_hyperparams
+    discounted_rewards = []
+
+    for t in range(len(rewards)):
+        Gt = 0
+        pw = 0
+        for r in rewards[t:]:
+            Gt = Gt + GAMMA**pw * r
+            pw = pw + 1
+        discounted_rewards.append(Gt)
+
+    discounted_rewards = torch.tensor(discounted_rewards)
+    discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (discounted_rewards.std() + 1e-9) # normalize discounted rewards
+
+    policy_gradient = []
+    for log_prob, Gt in zip(log_probs, discounted_rewards):
+        policy_gradient.append(-log_prob * Gt)
+
+    controler.optimizer.zero_grad()
+    policy_gradient = torch.stack(policy_gradient).sum()
+    policy_gradient.backward()
+    controler.optimizer.step()
 
 
 dict_params = dict()
@@ -121,12 +144,13 @@ best_model = None
 Rmax = -99999999
 
 for k in range(MAX_ITER):
-    list_desc = controler.generate_desc()
-    model_to_test = ControllerNetwork(list_desc)
+    log_probs = controler(torch.tensor([]))
+    list_desc = argmax(log_probs)
+    model_to_test = ConvNetwork(list_desc)
     R = netTester.get_reward(model_to_test)
     if(R>Rmax):
         best_model = model_to_test
         Rmax = R
-    update_controler(controler,R)
+    update_controler(controler,R,log_probs)
 
 print(netTester.test_score(best_model))
