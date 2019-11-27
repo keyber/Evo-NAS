@@ -6,13 +6,14 @@ from random import random, choice
 class Architecture:
     """Contient un réseau de neurones, une loss et un optimiser"""
     
-    def __init__(self, search_space, architecture):
+    def __init__(self, search_space, architecture, lr_scheduler=None):
         self.search_space = search_space
         self.architecture = architecture
         
         self.net = search_space.create_model(architecture)
         self.loss = nn.CrossEntropyLoss()
         self.optim = Adam(self.net.parameters())
+        self.lr_scheduler = lr_scheduler
     
     def mutate(self, r=.5):
         """Retourne une nouvelle architecture en rechoisissant les caractéristiques avec une proba r"""

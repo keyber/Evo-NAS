@@ -19,7 +19,8 @@ def fit_model(model, data, n_epochs=2, max_iter=1e8):
             if i==max_iter:
                 return 
         
-        model.lr_scheduler.step(epoch)
+        if model.lr_scheduler is not None:
+            model.lr_scheduler.step(epoch)
         
 
 def score_model(model, data):
