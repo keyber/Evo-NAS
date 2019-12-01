@@ -40,7 +40,8 @@ def run_agent(space:SearchSpace, agent:Agent, n_iter=10, verbose=0):
 
 
 def main_learn_to_count():
-    space = instances.learn_to_count(10)
+    print("\n\n\n Learn To Count")
+    space = instances.learn_to_count(space_size=10)
     
     agents = [
         AgentRS(space),
@@ -54,8 +55,10 @@ def main_learn_to_count():
 
 def main_cifar10():
     print("\n\n\nCIFAR 10")
+    # entraînement très réduit juste pour voir le code tourner
     space = instances.cifar10(batch_size=3, reduced=True, train_params={"n_epochs":2, "max_iter":2})
     
+    # on peut changer loss, optim, et lr_scheduler et leurs paramètres
     agents = [
         AgentRS(space, loss_param=(nn.CrossEntropyLoss, {}), optim_param=(Adam, {"lr":1e-5}),
                 lr_scheduler_param=(ExponentialLR, {"gamma": .9})),

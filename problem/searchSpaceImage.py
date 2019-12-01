@@ -20,9 +20,16 @@ class SearchSpaceImage(SearchSpace):
         self.train_params = train_params if train_params is not None else {}
 
     def _create_model(self, gbl_values, loc_values):
+        """
+        crée toutes les convolutions décrites,
+        insert des ReLU entre
+        finit par un Fully Connected
+        """
         assert gbl_values["layer_number"] == len(loc_values)
         conv = []
         in_channels = self.in_channels
+        
+        # maintient le calcul de cette valeur pour le fully connected
         image_width = self.imagewidth
     
         for layer in loc_values:
@@ -51,6 +58,7 @@ class SearchSpaceImage(SearchSpace):
         return Net(self, conv, fc)
 
     def score(self, archi:ArchitectureNN):
+        """fit le modele puis retourne ses performances en test"""
         archi.fit_model(self.train_data, **self.train_params)
     
         return archi.compute_test_score(self.test_data)

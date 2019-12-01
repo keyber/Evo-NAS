@@ -8,6 +8,9 @@ class SearchSpaceL2C(SearchSpace):
         self.space = search_space
     
     def score(self, archi):
+        """cf article: retourne
+        1 pour des nombres dans l'ordre
+        un nombre entre 0 et 1 sinon"""
         a = archi
         n = self.space
         
@@ -21,6 +24,7 @@ class SearchSpaceL2C(SearchSpace):
         return (n + 1) / s
     
     def mutate(self, archi, r=.5, **kwargs):
+        """permutte des éléments voisins"""
         values = archi.copy()
         for i in range(self.space - 1):
             if random() < r:

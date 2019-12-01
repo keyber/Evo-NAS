@@ -6,8 +6,8 @@ import torch.utils
 from torchvision import transforms
 
 
-def learn_to_count(n):
-    return SearchSpaceL2C(n)
+def learn_to_count(space_size):
+    return SearchSpaceL2C(space_size)
     
     
 def cifar10(batch_size, reduced=False, train_params=None):
