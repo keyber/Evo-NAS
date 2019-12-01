@@ -8,7 +8,7 @@ import torch
 
 class NasLSTM(nn.Module):
 
-    def __init__(self, num_embeddings, embedding_dim, hidden_dim, state_sizes, num_layers=2):
+    def __init__(self, num_embeddings, embedding_dim, hidden_dim, state_sizes, num_layers):
         """
             Controller LSTM which is tasked to generate architectural hyperparameters of neural networks
 
@@ -18,32 +18,28 @@ class NasLSTM(nn.Module):
         :param state_sizes: list storing each state size of the state space
                             Suppose the following state space: [kernel1, filter1, kernel2, filter2],
                             state_sizes will be [kernel_size, filter_size, kernel_size, filter_size]
-        :param num_layers: number of layers (default value as defined in 'Neural Architecture Search With Reinforcement
-                           Learning' (Zoph and Le, ICLR 2017))
+        :param num_layers: number of convolutional layers in the child network
         """
         super(NasLSTM, self).__init__()
         self.hidden_dim = hidden_dim
-        self.word_embeddings = nn.Embedding(num_embeddings, embedding_dim)
+        self.embeddings = nn.Embedding(num_embeddings, embedding_dim)
+        # stacked LSTM, with the second LSTM taking in outputs of the first LSTM and computing the final results
         self.nas_cell_layer1 = nn.LSTMCell(input_size=embedding_dim, hidden_size=hidden_dim)
         self.nas_cell_layer2 = nn.LSTMCell(input_size=embedding_dim, hidden_size=hidden_dim)
-        #self.lstm = nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers)
-        self.hidden2state = [nn.Linear(hidden_dim, size) for size in state_sizes]
+        self.hidden2state = nn.ModuleList([nn.Linear(hidden_dim, size) for size in state_sizes])
 
-    def forward(self, input_seq):
-        seq_len = input_seq.shape[0]
-        batch_size = input_seq.shape[1]
+    def forward(self, input):
+        embeds = self.embeddings(input)
 
-        embeds = self.word_embeddings(input_seq)
-
-        h1 = torch.zeros((batch_size, self.hidden_dim))
-        c1 = torch.zeros((batch_size, self.hidden_dim))
-        h2 = torch.zeros((batch_size, self.hidden_dim))
-        c2 = torch.zeros((batch_size, self.hidden_dim))
+        h1 = torch.zeros((1, self.hidden_dim))
+        c1 = torch.zeros((1, self.hidden_dim))
+        h2 = torch.zeros((1, self.hidden_dim))
+        c2 = torch.zeros((1, self.hidden_dim))
         input_layer1 = embeds[0]
 
         state_scores = []
 
-        for i in range(seq_len):
+        for i in range(self.num_layers):
             h1, c1 = self.nas_cell_layer1(input_layer1, (h1, c1))
             h2, c2 = self.nas_cell_layer2(h1, (h2, c2))
             prob = self.hidden2state[i](h2)
@@ -52,24 +48,17 @@ class NasLSTM(nn.Module):
             state_scores.append(prob)
             pred = torch.argmax(prob, dim=1)
 
-            input_layer1 = pred
+            input_layer1 = self.embeddings(pred)
 
         return state_scores
 
 class Controller:
     '''
-    Utility class to manage the RNN Controller
+        Utility class to manage the RNN Controller
     '''
 
-    def __init__(self, num_layers, state_space,
-                 reg_param=0.001,
-                 discount_factor=0.99,
-                 exploration=0.8,
-                 hidden_units=35,
-                 embedding_dim=20,
-                 clip_norm=0.0,
-                 restore_controller=False,
-                 init_upper_bound=0.08,
+    def __init__(self, num_layers, state_space, reg_param=0.001, discount_factor=0.99, exploration=0.8,
+                 hidden_units=35, embedding_dim=20, clip_norm=0.0, restore_controller=False, init_upper_bound=0.08,
                  learning_rate=6e-4):
 
         self.num_layers = num_layers
@@ -128,10 +117,8 @@ class Controller:
 
             states = self.state_space.get_embedding_ids(states)
             input_state = states[0]
-            state_input_size = self.state_space[0]['size']
-            input_state = input_state[0].reshape((1, state_input_size)).astype('int32')
 
-            print("State input to Controller for Action : ", states[0].flatten())
+            print("State input to Controller for Action : ", states[0])
 
             prob_actions = self.policy_network(input_state)
             actions = torch.argmax(prob_actions, dim=2)
@@ -143,12 +130,14 @@ class Controller:
 
         self.policy_network = NasLSTM(num_embeddings=num_distinct_states, embedding_dim=self.embedding_dim,
                                 hidden_dim=self.hidden_units,
-                                state_sizes=self.state_space.get_state_sizes(self.num_layers))
+                                state_sizes=self.state_space.get_state_sizes(self.num_layers),
+                                num_layers=self.num_layers)
 
-        for name, param in self.policy_network.lstm.named_parameters():
-            nn.init.xavier_uniform(param, a=-self.upper_bound, b=self.upper_bound)
+        for name, param in self.policy_network.named_parameters():
+            if "nas_cell_layer" in name:
+                nn.init.uniform(param, a=-self.upper_bound, b=self.upper_bound)
 
-        self.policy_optim = optim.Adam(self.policy_network.parameters(), lr=self.lr)
+        self.policy_optim = optim.Adam(self.policy_network.parameters(), lr=self.lr, weight_decay=self.reg_strength)
 
     def store_rollout(self, state, reward, prob):
         self.reward_buffer.append(reward)
@@ -185,38 +174,31 @@ class Controller:
                 pw += 1
             discounted_rewards.append(Gt)
 
+        print(discounted_rewards)
         discounted_rewards = np.array(discounted_rewards)
         discounted_rewards = (discounted_rewards - np.mean(discounted_rewards)) / (
                 np.std(discounted_rewards) + 1e-9)  # normalize discounted rewards
 
         return discounted_rewards
 
-    # todo: à revoir
     def update_policy(self):
         """
-            Perform a single train step on the Controller RNN
+            Updates policy using REINFORCE
         :return: the training loss
         """
         probs = self.prob_buffer[-1]
 
-        # parse the state space to get real value of the states,
-        # then one hot encode them for comparison with the predictions
-        state_list = self.state_space.parse_state_space_list(states)
-
         # the discounted reward value
         rewards = self.discount_rewards()
 
-        print("Training RNN (States ip) : ", state_list)
-        print("Training RNN (Reward ip) : ", rewards)
-
         policy_gradient = []
         for log_prob, Gt in zip(probs, rewards):
-            policy_gradient.append(-log_prob * Gt)
+            policy_gradient.append(torch.tensor(-log_prob * Gt))
 
-        self.policy_network.optimizer.zero_grad()
+        self.policy_optim.zero_grad()
         policy_gradient = torch.stack(policy_gradient).sum()
         policy_gradient.backward()
-        self.policy_network.optimizer.step()
+        self.policy_optim.step()
 
         # reduce exploration after many train steps
         if self.global_step != 0 and self.global_step % 20 == 0 and self.exploration > 0.5:

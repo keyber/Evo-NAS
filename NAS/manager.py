@@ -64,8 +64,7 @@ class NetworkManager:
 
                 losses.append(loss.item())
 
-                assert output.shape == target.shape
-                correct = (torch.argmax(output, dim=1) == target)
+                correct = torch.sum(torch.argmax(output, dim=-1) == target).item()
                 batch_accuracy = correct / len(target)
 
                 accuracies.append(batch_accuracy)
@@ -82,17 +81,14 @@ class NetworkManager:
         :param valid: dataloader storing validation data
         :return: best accuracy computed on validation data along with the corresponding model weights
         """
-        opt_reached = False
-        # mean_train_loss = None
-        # mean_test_loss = None
         best_acc = 0
-        # best_params = None
+        train_loss = None
 
         network.train()
+        print("Training child model...")
         for epoch in range(self.epochs):
-            if opt_reached:
-                break
-            # train_batch_losses = []
+            print("Epoch {}, last training loss={}".format(epoch, train_loss))
+            train_loss = []
             for _, (input, target) in enumerate(train):
                 optimizer.zero_grad()
 
@@ -102,19 +98,20 @@ class NetworkManager:
                 output = network(input)
 
                 loss = self.criterion(output, target)
-                # train_batch_losses.append(loss.item())
+                train_loss.append(loss.item())
                 loss.backward()
 
                 optimizer.step()
 
-            # mean_train_loss = np.mean(train_batch_losses)
-            mean_test_loss, mean_test_acc = self.evaluate(network, valid)
+            train_loss = np.mean(train_loss)
+            if epoch in range(self.epochs - 5, self.epochs):
+                mean_test_loss, mean_test_acc = self.evaluate(network, valid)
 
-            if mean_test_acc > best_acc:
-                best_acc = mean_test_acc
-                # best_params = network.state_dict()
+                if mean_test_acc > best_acc:
+                    best_acc = mean_test_acc
+                    # best_params = network.state_dict()
 
-        return best_acc
+        return np.power(best_acc, 3)
 
     def get_rewards(self, model):
         """
@@ -132,7 +129,7 @@ class NetworkManager:
                               momentum=self.momentum, nesterov=self.nesterov)
 
         # train and evaluate the model
-        acc, best_params = self.train_network(model, optimizer, train_dataloader, valid_dataloader)
+        acc = self.train_network(model, optimizer, train_dataloader, valid_dataloader)
 
         # compute the reward
         reward = (acc - self.moving_acc)

@@ -6,7 +6,8 @@ from torch.utils.data import random_split
 import csv
 from child_network import ChildNetwork
 from manager import NetworkManager
-import numpy as np
+from controller import Controller
+from torch.utils.data.sampler import SubsetRandomSampler
 
 datasets.CIFAR10.url = "http://webia.lip6.fr/~robert/cours/rdfia/cifar-10-python.tar.gz"
 CUDA = False
@@ -14,12 +15,10 @@ CUDA = False
 NUM_LAYERS = 4  # number of layers of the state space
 MAX_TRIALS = 250  # maximum number of models generated
 
-# MAX_EPOCHS = 10  # maximum number of epochs to train
 CHILD_BATCHSIZE = 64  # batchsize of the child models
                       # defined in 'Densely Connected Convolutional Networks' (Huang et al., CVPR 2016)
 EXPLORATION = 0.8  # high exploration for the first 1000 steps
 REGULARIZATION = 1e-3  # regularization strength
-#CONTROLLER_CELLS = 32  # number of cells in RNN controller
 HIDDEN_UNITS = 35 # number of hidden units on each layer
 EMBEDDING_DIM = 20  # dimension of the embeddings for each state
 ACCURACY_BETA = 0.8  # beta value for the moving average of the accuracy
@@ -47,10 +46,8 @@ def get_dataset(batch_size, path):
                                          transforms.Normalize((0.491, 0.482, 0.447), (0.202, 0.199, 0.201))
                                      ])) # todo: whiten all images as part of the preprocessing
     train_dataset, val_dataset = random_split(train_dataset,
-                                                (int(0.9 * len(train_dataset)),
-                                                 int(0.1 * len(train_dataset))))
-    print(train_dataset.__getitem__(0)[0].shape)
-    #todo: "the validation set has 5000 examples randomly sampled from the training set, the remaining 45,000 are used for training"
+                                                (int(0.1 * len(train_dataset)),
+                                                 int(0.9 * len(train_dataset))))
                                     # not sure whether to apply center crop or random crop on validation data
     test_dataset = datasets.CIFAR10(path, train=False, download=True,
                                    transform=transforms.Compose([
@@ -59,12 +56,17 @@ def get_dataset(batch_size, path):
                                        transforms.Normalize((0.491, 0.482, 0.447), (0.202, 0.199, 0.201))
                                    ])) # todo: whiten all images as part of the preprocessing
 
+    train_subset = torch.randint(0, len(train_dataset), (100,))
+    val_subset = torch.randint(0, len(val_dataset), (100,))
+
     train_loader = torch.utils.data.DataLoader(train_dataset,
-                                               batch_size=batch_size, shuffle=True)
+                                               batch_size=batch_size, #shuffle=True)
+                                               sampler=SubsetRandomSampler(train_subset))
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                                batch_size=batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_dataset,
-                                             batch_size=batch_size, shuffle=False)
+                                             batch_size=batch_size, #shuffle=False)
+                                             sampler = SubsetRandomSampler(val_subset))
 
     return train_loader, val_loader, test_loader
 
@@ -87,18 +89,12 @@ def main_training():
     previous_acc = 0.0
     total_reward = 0.0
 
-    controller = None # todo: add controller
-    manager = NetworkManager(dataloaders, device)
+    controller = Controller(NUM_LAYERS, state_space)
+    manager = NetworkManager(dataloaders, device, epochs=2)
 
     # get an initial random state space if controller needs to predict an action from the initial state
     state = state_space.get_random_state_space(NUM_LAYERS)
     print("Initial Random State : ", state_space.parse_state_space_list(state))
-
-    state_input_size = state_space[0]['size']
-    state_input = state[0].reshape((1, state_input_size)).astype('int32')
-    print("State input to Controller for training : ", state_input.flatten())
-
-    return
 
     for trial in range(MAX_TRIALS):
         actions, prob_actions = controller.get_action(state)  # get an action for the previous state
@@ -121,7 +117,7 @@ def main_training():
         controller.store_rollout(state, reward, prob_state)
 
         # train the controller on the saved state and the discounted rewards
-        loss = controller.train_step()
+        loss = controller.update_policy()
         print("Trial %d: Controller loss : %0.6f" % (trial + 1, loss))
 
         # write the results of this trial into a file
