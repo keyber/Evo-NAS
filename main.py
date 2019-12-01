@@ -50,7 +50,7 @@ def main_learn_to_count():
     
     for agent in agents:
         print("\n\n\nAgent", agent.__class__)
-        run_agent(space, agent, n_iter=10000, verbose=1)
+        run_agent(space, agent, n_iter=100000, verbose=1)
 
 
 def main_cifar10():

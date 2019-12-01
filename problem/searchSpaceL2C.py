@@ -1,5 +1,4 @@
 from problem.searchSpace import SearchSpace
-from random import shuffle, random
 import numpy as np
 
 
@@ -22,18 +21,14 @@ class SearchSpaceL2C(SearchSpace):
         s += (a[n - 1] - (n + 1)) ** 2
         
         return (n + 1) / s
-    
+
     def mutate(self, archi, r=.5, **kwargs):
-        """permutte des éléments voisins"""
         values = archi.copy()
-        for i in range(self.space - 1):
-            if random() < r:
-                values[i], values[i+1] = values[i+1], values[i]
+        ind = np.random.random(self.space) < r
+        values[ind] = np.random.randint(1, self.space+1, len(values[ind]))
     
         return values
     
     def random_sample(self, **kwargs):
         """Retourne une architecture aléatoire de l'espace"""
-        l = np.arange(1, self.space + 1)
-        shuffle(l)
-        return l
+        return np.random.randint(1, self.space + 1, size=self.space)
