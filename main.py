@@ -1,76 +1,75 @@
-import torch
-import torch.utils.data
-import datasets
-from baselineRS import AgentRS
-from baselineEvo import AgentEvo
+from problem import instances
+from agent.agent import Agent
+from agent.baselineRS import AgentRS
+from agent.baselineEvo import AgentEvo
 import numpy as np
-
-def fit_model(model, data, n_epochs=2, max_iter=1e8):
-    i = 0
-    for epoch in range(n_epochs):
-        for x, y in data:
-            model.net.zero_grad()
-            y_pred = model.net(x)
-            loss = model.loss(y_pred, y)
-            loss.backward()
-            model.optim.step()
-            i += 1
-            
-            if i==max_iter:
-                return 
-        
-        if model.lr_scheduler is not None:
-            model.lr_scheduler.step(epoch)
-        
-
-def score_model(model, data):
-    model.net.eval()
-    loss = 0
-    
-    with torch.no_grad():
-        for x, y in data:
-            y_pred = model.net(x)
-            loss += model.loss(y_pred, y).item()
-    
-    return loss
+import torch.nn as nn
+from torch.optim import Adam
+from torch.optim.lr_scheduler import ExponentialLR
+from problem.searchSpace import SearchSpace
 
 
-def run_agent(ds_train, ds_test, agent, n_iter=10, train_max_iter=1e8, batch_size=7, verbose=0):
-    train = torch.utils.data.DataLoader(ds_train, batch_size=batch_size, drop_last=True)
-    test = torch.utils.data.DataLoader(ds_test, batch_size=batch_size, drop_last=True)
+def run_agent(space:SearchSpace, agent:Agent, n_iter=10, verbose=0):
+    """appelle n_iter fois agent.act et retourne la meilleure architecture trouvée"""
     best_a, best_v = None, -np.inf
     
     archi = agent.act(last_reward=None)
     
+    s = len(str(n_iter))
+    
+    if verbose:
+        print("iter".ljust(s+2), "val    archi")
+    
     
     for i in range(n_iter):
-        fit_model(archi, train, max_iter=train_max_iter)
-        score = score_model(archi, test)
+        score = space.score(archi)
         
         if score > best_v:
             best_v = score
             best_a = archi
             if verbose==1:
-                print(score, archi.architecture)
+                print(str(i).rjust(s, "0"), "  %.2f  "%score, archi)
                 
         if verbose==2:
-            print(score, archi.architecture)
+            print(str(i).rjust(s, "0"), "  %.2f  "%score, archi)
         
         archi = agent.act(last_reward=score)
         
     
     return best_a, best_v
-        
 
-def main():
-    space, ds_train, ds_test = datasets.cifar10(reduced=True)
-    agents = [AgentEvo(space, min_p=3, max_p=5, s=2), AgentRS(space)]
+
+def main_learn_to_count():
+    print("\n\n\n Learn To Count")
+    space = instances.learn_to_count(space_size=10)
+    
+    agents = [
+        AgentRS(space),
+        AgentEvo(space, min_p=50, max_p=100, s=20),
+    ]
     
     for agent in agents:
-        print("Agent", agent.__class__)
-        best_arch, best_val = run_agent(ds_train, ds_test, agent, n_iter=10, train_max_iter=2, verbose=2)
-        print("best archi", best_arch.architecture)
-        print("best val", best_val)
-        print("\n\n\n")
+        print("\n\n\nAgent", agent.__class__)
+        run_agent(space, agent, n_iter=100000, verbose=1)
 
-main()
+
+def main_cifar10():
+    print("\n\n\nCIFAR 10")
+    # entraînement très réduit juste pour voir le code tourner
+    space = instances.cifar10(batch_size=3, reduced=True, train_params={"n_epochs":2, "max_iter":2})
+    
+    # on peut changer loss, optim, et lr_scheduler et leurs paramètres
+    agents = [
+        AgentRS(space, loss_param=(nn.CrossEntropyLoss, {}), optim_param=(Adam, {"lr":1e-5}),
+                lr_scheduler_param=(ExponentialLR, {"gamma": .9})),
+        AgentEvo(space, min_p=3, max_p=5, s=2),
+    ]
+    
+    for agent in agents:
+        print("\n\n\nAgent", agent.__class__)
+        best_archi, best_val = run_agent(space, agent, n_iter=10, verbose=1)
+        print("best archi", best_archi)
+        print("best val", best_val)
+
+main_learn_to_count()
+main_cifar10()

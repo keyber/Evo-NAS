@@ -1,5 +1,7 @@
+from problem.searchSpace import SearchSpace
 import torch.nn as nn
 import numpy as np
+from collections import namedtuple
 
 
 _SEARCH_SPACE_TEXT = {
@@ -26,18 +28,19 @@ _SEARCH_SPACE_TEXT = {
 }
 
 
-class SearchSpaceText:
+class SearchSpaceText(SearchSpace):
     def __init__(self):
-        self.space = _SEARCH_SPACE_TEXT
+        space = _SEARCH_SPACE_TEXT
+        self.space = namedtuple("Space", space.keys())(*space.values())
     
-    @staticmethod
-    def create_model(choices):
+    def create_model(self, gbl_values, loc_values):
+        assert gbl_values["layer_number"] == len(loc_values)
         # todo
         # text embedding module
         l = []
         #l.append(embedding)
         
-        if choices["use_conv"]:
+        if gbl_values["use_conv"]:
             l.append()
         
         # fc stack
