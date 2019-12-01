@@ -69,22 +69,22 @@ class SearchSpaceImage(SearchSpace):
     
         n = gbl_values["layer_number"]
         loc_values = [{k: choice(v) for (k, v) in self.space.loc.items()} for _ in range(n)]
-
+        
         net = self._create_model(gbl_values, loc_values)
         return ArchitectureNN(gbl_values, loc_values, net, **kwargs)
-    
-    def mutate(self, archi:ArchitectureNN, r=.5, **kwargs):
+
+    def mutate(self, archi: ArchitectureNN, r=.5, **kwargs):
         """Retourne une nouvelle architecture en re-samplant les caractéristiques avec une probabilité r"""
-        gbl_values = {k: choice(v) for (k, v) in self.space.gbl.items()}
+        gbl_values = {k: choice(v) if random() < r else archi.gbl_values[k] for (k, v) in self.space.gbl.items()}
     
         n = gbl_values["layer_number"]
         loc_values = []
         for i in range(n):
             if i < archi.gbl_values["layer_number"]:
                 loc_values.append({k: choice(v) if random() < r else archi.loc_values[i][k]
-                                   for (k,v) in self.space.loc.items()})
+                                   for (k, v) in self.space.loc.items()})
             else:
-                loc_values.append({k: choice(v) for (k,v) in self.space.loc.items()})
+                loc_values.append({k: choice(v) for (k, v) in self.space.loc.items()})
         
         net = self._create_model(gbl_values, loc_values)
         return ArchitectureNN(gbl_values, loc_values, net, **kwargs)
