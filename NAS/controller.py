@@ -8,49 +8,51 @@ import torch
 
 class NasLSTM(nn.Module):
 
-    def __init__(self, num_embeddings, embedding_dim, hidden_dim, state_sizes, num_layers):
+    def __init__(self, num_embeddings, embedding_dim, hidden_dim, state_space, num_layers):
         """
             Controller LSTM which is tasked to generate architectural hyperparameters of neural networks
 
         :param num_embeddings: total number of states (= number of architectural choices for each type of layer)
         :param embedding_dim: embedding dimension
         :param hidden_dim: number of hidden units
-        :param state_sizes: list storing each state size of the state space
-                            Suppose the following state space: [kernel1, filter1, kernel2, filter2],
-                            state_sizes will be [kernel_size, filter_size, kernel_size, filter_size]
+        :param state_space
         :param num_layers: number of convolutional layers in the child network
         """
-        super(NasLSTM, self).__init__()
+        super().__init__()
         self.hidden_dim = hidden_dim
+        self.embedding_dim = embedding_dim
+        self.state_space = state_space
+        state_sizes = state_space.get_state_sizes(num_layers)
+        self.num_layers = num_layers
         self.embeddings = nn.Embedding(num_embeddings, embedding_dim)
         # stacked LSTM, with the second LSTM taking in outputs of the first LSTM and computing the final results
         self.nas_cell_layer1 = nn.LSTMCell(input_size=embedding_dim, hidden_size=hidden_dim)
-        self.nas_cell_layer2 = nn.LSTMCell(input_size=embedding_dim, hidden_size=hidden_dim)
+        self.nas_cell_layer2 = nn.LSTMCell(input_size=hidden_dim, hidden_size=hidden_dim)
         self.hidden2state = nn.ModuleList([nn.Linear(hidden_dim, size) for size in state_sizes])
 
     def forward(self, input):
-        embeds = self.embeddings(input)
+        input_layer1 = self.embeddings(input).reshape((1, self.embedding_dim))
 
         h1 = torch.zeros((1, self.hidden_dim))
         c1 = torch.zeros((1, self.hidden_dim))
         h2 = torch.zeros((1, self.hidden_dim))
         c2 = torch.zeros((1, self.hidden_dim))
-        input_layer1 = embeds[0]
 
         state_scores = []
 
-        for i in range(self.num_layers):
+        for i in range(self.state_space.size * self.num_layers):
             h1, c1 = self.nas_cell_layer1(input_layer1, (h1, c1))
             h2, c2 = self.nas_cell_layer2(h1, (h2, c2))
             prob = self.hidden2state[i](h2)
 
             prob = F.log_softmax(prob, dim=1)
-            state_scores.append(prob)
+            state_scores.append(prob.flatten())
             pred = torch.argmax(prob, dim=1)
 
-            input_layer1 = self.embeddings(pred)
+            input_layer1 = self.embeddings(torch.tensor(self.state_space.get_embedding_id(i, pred)))
+            input_layer1 = input_layer1.unsqueeze(0)
 
-        return state_scores
+        return torch.stack(state_scores)
 
 class Controller:
     '''
@@ -99,16 +101,21 @@ class Controller:
         if np.random.random() < self.exploration:
             print("Generating random action to explore")
             actions = []
+            prob_actions = []
 
             for i in range(self.state_size * self.num_layers):
                 state_ = self.state_space[i]
                 size = state_['size']
+                prob = torch.zeros(size)
 
-                sample = np.random.choice(size, size=1)
-                sample = state_['index_map_'][sample[0]]
-                action = self.state_space.onehot_encode(i, sample)
-                actions.append(action)
-            return actions, actions
+                ind = np.random.choice(size, size=1)[0]
+                prob[ind] = 1
+                # sample = state_['index_map_'][sample[0]]
+                # action = self.state_space.onehot_encode(i, sample)
+                actions.append(ind)
+                prob_actions.append(prob)
+
+            return torch.tensor(actions), torch.stack(prob_actions).requires_grad_(True)
 
         else:
             print("Prediction action from Controller")
@@ -116,12 +123,13 @@ class Controller:
             size = initial_state['size']
 
             states = self.state_space.get_embedding_ids(states)
-            input_state = states[0]
+            input_state = torch.tensor(states[0])
 
             print("State input to Controller for Action : ", states[0])
 
             prob_actions = self.policy_network(input_state)
-            actions = torch.argmax(prob_actions, dim=2)
+            print(prob_actions.shape)
+            actions = torch.argmax(prob_actions, dim=1)
 
             return actions, prob_actions
 
@@ -130,12 +138,12 @@ class Controller:
 
         self.policy_network = NasLSTM(num_embeddings=num_distinct_states, embedding_dim=self.embedding_dim,
                                 hidden_dim=self.hidden_units,
-                                state_sizes=self.state_space.get_state_sizes(self.num_layers),
+                                state_space=self.state_space,
                                 num_layers=self.num_layers)
 
         for name, param in self.policy_network.named_parameters():
             if "nas_cell_layer" in name:
-                nn.init.uniform(param, a=-self.upper_bound, b=self.upper_bound)
+                nn.init.uniform_(param, a=-self.upper_bound, b=self.upper_bound)
 
         self.policy_optim = optim.Adam(self.policy_network.parameters(), lr=self.lr, weight_decay=self.reg_strength)
 
@@ -149,7 +157,7 @@ class Controller:
             with open('buffers.txt', mode='a+') as f:
                 for i in range(20):
                     state_ = self.state_buffer[i]
-                    state_list = self.state_space.parse_state_space_list(state_)
+                    state_list = state_
                     state_list = ','.join(str(v) for v in state_list)
 
                     f.write("%0.4f,%s\n" % (self.reward_buffer[i], state_list))
@@ -158,6 +166,7 @@ class Controller:
 
             self.reward_buffer = [self.reward_buffer[-1]]
             self.state_buffer = [self.state_buffer[-1]]
+
 
     def discount_rewards(self):
         '''
@@ -174,7 +183,6 @@ class Controller:
                 pw += 1
             discounted_rewards.append(Gt)
 
-        print(discounted_rewards)
         discounted_rewards = np.array(discounted_rewards)
         discounted_rewards = (discounted_rewards - np.mean(discounted_rewards)) / (
                 np.std(discounted_rewards) + 1e-9)  # normalize discounted rewards
@@ -187,13 +195,15 @@ class Controller:
         :return: the training loss
         """
         probs = self.prob_buffer[-1]
+        probs = probs.clone() #.requires_grad_(True)
 
         # the discounted reward value
         rewards = self.discount_rewards()
+        rewards = torch.tensor(rewards)
 
         policy_gradient = []
         for log_prob, Gt in zip(probs, rewards):
-            policy_gradient.append(torch.tensor(-log_prob * Gt))
+            policy_gradient.append(-log_prob * Gt)
 
         self.policy_optim.zero_grad()
         policy_gradient = torch.stack(policy_gradient).sum()
