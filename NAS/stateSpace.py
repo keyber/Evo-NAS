@@ -125,10 +125,10 @@ class StateSpace:
             state = self[id]
             size = state['size']
 
-            sample = np.random.choice(size, size=1)
-            sample = state['index_map_'][sample[0]]
-            state = self.onehot_encode(id, sample)
-            states.append(state)
+            sample = np.random.choice(size, size=1)[0]
+            # sample = state['index_map_'][sample[0]]
+            # state = self.onehot_encode(id, sample)
+            states.append(sample)
         return states
 
     def parse_state_space_list(self, state_list):
@@ -149,9 +149,9 @@ class StateSpace:
     def get_embedding_ids(self, state_list):
         embedding_ids = []
 
-        for id, state_one_hot in enumerate(state_list):
-            state_val_idx = np.argmax(state_one_hot, axis=-1)[0]
-            embedding_id = self.get_embedding_id(id, state_val_idx)
+        for id, ind in enumerate(state_list):
+            # state_val_idx = np.argmax(state_one_hot, axis=-1)[0]
+            embedding_id = self.get_embedding_id(id, ind)
             embedding_ids.append(embedding_id)
 
         return embedding_ids
@@ -177,7 +177,7 @@ class StateSpace:
 
             state = self[id]
             name = state['name']
-            vals = [(n, p) for n, p in zip(state['values'], *action)]
+            vals = [(n, p) for n, p in zip(state['values'], action)]
             print("%s : " % name, vals)
         print()
 
