@@ -47,64 +47,43 @@ class ConvNetwork(nn.Module):
         #print(x.shape)
         return x
 
-class ControllerNetwork(nn.Module):
+class Controller_evolution():
     #list_desc example : list_desc=["Number_of_filters","Filter_size","Stride"]
-    def __init__(self,list_desc,dict_params, hidden_size, num_layers):
-        super(ControllerNetwork, self).__init__()
+    def __init__(self,list_desc,dict_params):
         self.list_desc = list_desc
         self.dict_params = dict_params
         self.taille = len(list_desc)
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        #Le input size est de la taille de l'embedding
-        self.rnn = nn.LSTM(1, hidden_size, num_layers)
-        self.list_embed_weights = []
-        for desc in self.list_desc:
-            self.list_embed_weights.append(nn.Linear(hidden_size, len(dict_params[desc])))
-        self.list_embed_weights = nn.ModuleList(self.list_embed_weights)
-        self.soft = nn.Softmax(dim=0)
 
+    def generate_network(self):
+        all_choix = []
+        for name_generate in self.list_desc:
+            liste_possibilite = dict_params[name_generate]
+            choix = np.random.randint(0,len(liste_possibilite), size=1)[0]
+            all_choix.append(choix)
+        return all_choix
+    
+    def mutate_network(self,description_actuelle):
+        alea = np.random.random()
+        if(alea<0.3):
+            #Muter la description
+            numero_of_parametter = len(description_actuelle)
+            choix_parammettre = np.random.randint(0,numero_of_parametter,1)[0]
+            choix_possible = self.dict_params[self.list_desc[choix_parammettre]]
+            valeur_param = np.random.randint(0,len(choix_possible),1)[0]
+            description_actuelle[choix_parammettre] = valeur_param
+            return description_actuelle
+        else:
+            return description_actuelle
+    
+    def best_in_sample(self,sample):
+        maxi = -np.inf
+        best_model = None
+        for model in sample:
+            if(model[1]>maxi):
+                maxi = model[1]
+                best_model=model
+        return best_model
 
-    def forward(self, inutile):
-        h = torch.zeros([self.num_layers, 1, self.hidden_size],requires_grad=True)
-        c = torch.zeros([self.num_layers, 1, self.hidden_size],requires_grad=True)
-        x = torch.zeros([1,1,1],requires_grad=True)
-
-        #print("h req",h.requires_grad)
-        #print("c req",c.requires_grad)
-        all_decision = torch.tensor([],requires_grad=True)
-        all_probs = torch.tensor([],requires_grad=True)
-        #print("requires grad des concat")
-        #print(all_decision.requires_grad)
-        #On fait N passage ou seq_len est égale à 1 pour chaqu'un car c'est la sortie que l'on remet dans le réseaux
-        for embed in self.list_embed_weights:
-            _, (h_n, c_n) = self.rnn(x, (h, c))
-            h = h_n[-1,0]
-            #c = c_n[-1,0]
-            before_soft = embed(h)
-            #print(before_soft.shape)
-            decision = self.soft(before_soft)
-            #print("Distribution de proba sur un des paramettres")
-            #print(decision)
-            #Attention : Peut etre sampling ou max
-            prob_dist = torch.distributions.Categorical(decision)
-            indice_max = prob_dist.sample()
-            #print(indice_max)
-            proba = decision[indice_max]
-            #print(proba)
-            indice_max = indice_max.float()
-            #proba = decision.max(0)[0].float()
-            #indice_max = decision.max(0)[1].float()
-            #print("proba requires grad",proba.requires_grad)
-            
-            all_decision = torch.cat((all_decision, indice_max.unsqueeze(0)))
-            all_probs = torch.cat((all_probs,proba.unsqueeze(0)))
-            x = indice_max
-            x = x.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-            h = h_n
-            c = c_n
-        #print("allprobs requires grad",all_probs.requires_grad)
-        return all_decision.int(),all_probs
 
 
 class NetworkTester():
@@ -173,47 +152,10 @@ class NetworkTester():
         return self.accuracy(net,self.test_loader)
 
 
-def update_controler(controler, optimizer, reward, log_probs,epoch,nb_traj_echant,GAMMA=0.99):
-    nb_hyperparams = len(log_probs)
-    rewards = [reward]*nb_hyperparams
-    #Ancienne facon
-    """
-    discounted_rewards = []
-    for t in range(len(rewards)):
-        Gt = 0
-        pw = 0
-        for r in rewards[t:]:
-            Gt = Gt + GAMMA**pw * r
-            pw = pw + 1
-        discounted_rewards.append(Gt)
-    """
-    #new discounted
-    discounted_rewards = rewards
-
-    #Use a baseline
-    #discounted_rewards = torch.tensor(discounted_rewards)
-    #discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (discounted_rewards.std() + 1e-9) # normalize discounted rewards
-
-    policy_gradient = []
-    for log_prob, Gt in zip(log_probs, discounted_rewards):
-        policy_gradient.append(-log_prob * Gt)
-    #print("variable reinforce")
-    #print(log_probs)
-    #print(discounted_rewards)
-    #print(policy_gradient)
-
-    policy_gradient = torch.stack(policy_gradient).sum()
-    policy_gradient.backward()
-    
-    if( (epoch+1)%nb_traj_echant == 0):
-        optimizer.step()
-        optimizer.zero_grad()
-   
-
 def learning_to_count_reward(liste_pred):
     #On rajoute 1 pour passer de 1 à n au lieux de 0 à n-1
     #Normalement on devrais passer par dict param pour etre générique mais la flemme
-    liste_pred = list(liste_pred.detach().numpy()) 
+    #liste_pred = list(liste_pred.detach().numpy()) 
     liste_pred = [q+1 for q in liste_pred]
     #print(liste_pred)
     n = len(liste_pred)
@@ -231,76 +173,48 @@ for s in range(NUMBER):
 
 
 
-MAX_ITER = 5000
-HIDDEN_SIZE = 200
-NUM_LAYER = 1
+MAX_ITER = 2000
 NB_EPOCH = 2
-#Equivalent de m dans la papier
-NB_TRAJECTOIRE_ECHANTILLON = 6
+P = 500
+S = 50
+#Nombre de génération/répétition
+C = 5000
 
 list_desc=["Number_"+str(i+1) for i in range(NUMBER)]
-controler = ControllerNetwork(list_desc,dict_params,HIDDEN_SIZE,NUM_LAYER)
-#Change weight init of the controller
-def weights_init_uniform(m):
-    classname = m.__class__.__name__
-    # for every Linear layer in a model..
-    if classname.find('Linear') != -1:
-        # apply a uniform distribution to the weights and a bias=0
-        m.weight.data.uniform_(-0.08 ,0.08)
-        m.bias.data.fill_(0)
-#Initialize linear weight
-controler.apply(weights_init_uniform)
-#Initialize LSTM weight
-for layer_p in controler.rnn._all_weights:
-    for p in layer_p:
-        if 'weight' in p:
-            weights_init_uniform(controler.rnn.__getattr__(p))
-"""
-for name, param in controler.named_parameters():
-    if param.requires_grad:
-        print(name, param.data)
-"""
+controler = Controller_evolution(list_desc,dict_params)
 
-#Attention lr trop HAUT, juste pour le test
-controler_optimizer = optim.Adam(controler.parameters(), lr=5e-4)
 #netTester = NetworkTester(NB_EPOCH)
 best_model = None
 Rmax = -99999999
 
 all_reward = []
 
-somme = None
-for k in range(MAX_ITER):
-    indice_choix_controller,log_probs = controler(torch.tensor([]))
-    if(k%100==0):
-        print("Itération ",k,"/",MAX_ITER)
-        print("choix controller :",indice_choix_controller)
-    networkDesc = []
-    for q in range(len(indice_choix_controller)):
-        couple = (list_desc[q],int(indice_choix_controller[q].detach().numpy()))
-        networkDesc.append(couple)
-    #On multiplie la reward par 100 pour avoir un chiffre entre 0 et 100 au lieu de 0 et 1
-    R = learning_to_count_reward(indice_choix_controller)
+population = []
+all_model = []
 
+while len(population) < P:
+    desc = controler.generate_network()
+    R = learning_to_count_reward(desc)
     all_reward.append(R)
-    if(k%100==0):
-        print("Reward :",R)
-    if(R>Rmax):
-        #best_model = model_to_test
-        Rmax = R
-    
-    if(somme is None):
-        somme = R
-    else:
-        R -= (somme/k)
-        somme += R 
+    model = (desc,R)
+    population.append(model)
 
-    update_controler(controler, controler_optimizer, R, log_probs, k , NB_TRAJECTOIRE_ECHANTILLON)
+while len(all_model) < C:
+    sample = []
+    while len(sample) < S:
+        indice_candidat = np.random.randint(0,len(population),1)[0]
+        candidate = population[indice_candidat]
+        sample.append(candidate)
+    parent = controler.best_in_sample(sample)
+    child_desc = controler.mutate_network(parent[0])
+    R = learning_to_count_reward(child_desc)
+    all_reward.append(R)
+    child = (child_desc,R)
+    population.append(child)
+    all_model.append(child)
+    #On enleve le plus vieux modele
+    population = population[1:]
 
-#print(netTester.test_score(best_model))
-
-#plt.plot(all_reward)
-#plt.show()
 
 filtre_passe_bas = []
 RANGE = 10

@@ -74,6 +74,7 @@ class ControllerNetwork(nn.Module):
         #print("c req",c.requires_grad)
         all_decision = torch.tensor([],requires_grad=True)
         all_probs = torch.tensor([],requires_grad=True)
+        total_probs = torch.tensor([],requires_grad=True)
         #print("requires grad des concat")
         #print(all_decision.requires_grad)
         #On fait N passage ou seq_len est égale à 1 pour chaqu'un car c'est la sortie que l'on remet dans le réseaux
@@ -88,6 +89,7 @@ class ControllerNetwork(nn.Module):
             #print(decision)
             #Attention : Peut etre sampling ou max
             prob_dist = torch.distributions.Categorical(decision)
+            total_probs = torch.cat((total_probs,decision.unsqueeze(0)))
             indice_max = prob_dist.sample()
             #print(indice_max)
             proba = decision[indice_max]
@@ -104,7 +106,7 @@ class ControllerNetwork(nn.Module):
             h = h_n
             c = c_n
         #print("allprobs requires grad",all_probs.requires_grad)
-        return all_decision.int(),all_probs
+        return all_decision.int(),all_probs,total_probs
 
 
 class NetworkTester():
@@ -172,39 +174,51 @@ class NetworkTester():
     def test_score(self,net):
         return self.accuracy(net,self.test_loader)
 
+class HLoss(nn.Module):
+    def __init__(self):
+        super(HLoss, self).__init__()
 
-def update_controler(controler, optimizer, reward, log_probs,epoch,nb_traj_echant,GAMMA=0.99):
+    def forward(self, x):
+        b = F.softmax(x, dim=1) * F.log_softmax(x, dim=1)
+        b = -1.0 * b.sum()
+        return b
+        
+
+
+def update_controler(controler, optimizer, reward, log_probs,epoch,nb_traj_echant,best_pred,GAMMA=0.99,lambda_pg = 0.33,lambda_PQ=0.33,lambda_entrop=0.33):
     nb_hyperparams = len(log_probs)
     rewards = [reward]*nb_hyperparams
-    #Ancienne facon
-    """
-    discounted_rewards = []
-    for t in range(len(rewards)):
-        Gt = 0
-        pw = 0
-        for r in rewards[t:]:
-            Gt = Gt + GAMMA**pw * r
-            pw = pw + 1
-        discounted_rewards.append(Gt)
-    """
-    #new discounted
+
+    #loss lié au policy gradient
     discounted_rewards = rewards
-
-    #Use a baseline
-    #discounted_rewards = torch.tensor(discounted_rewards)
-    #discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (discounted_rewards.std() + 1e-9) # normalize discounted rewards
-
     policy_gradient = []
     for log_prob, Gt in zip(log_probs, discounted_rewards):
         policy_gradient.append(-log_prob * Gt)
-    #print("variable reinforce")
-    #print(log_probs)
-    #print(discounted_rewards)
-    #print(policy_gradient)
-
-    policy_gradient = torch.stack(policy_gradient).sum()
-    policy_gradient.backward()
+    policy_gradient_loss = torch.stack(policy_gradient).sum()
+   
     
+    #loss lié a la priority queue
+    criterion = nn.CrossEntropyLoss()
+    label = best_pred
+    list_loss_PQT = []
+    for l in label:
+        _,_,total_probs = controler(torch.tensor([]))
+        l = l.long()
+        list_loss_PQT.append(criterion(total_probs,l))
+    PQT_loss = torch.stack(list_loss_PQT).sum()
+
+    #loss lié a l'entropy pour avoir plus d'exploration
+    #PAS SUR DU TOUT POUR çA
+    _,_,total_probs = controler(torch.tensor([]))
+    criterion_entrop = HLoss()
+    loss_entropy = criterion_entrop(total_probs)
+
+
+    #loss total
+    total_loss = lambda_pg*policy_gradient_loss + lambda_PQ*PQT_loss + lambda_entrop*loss_entropy
+    total_loss.backward()
+
+
     if( (epoch+1)%nb_traj_echant == 0):
         optimizer.step()
         optimizer.zero_grad()
@@ -223,6 +237,31 @@ def learning_to_count_reward(liste_pred):
     somme+=(liste_pred[-1] - (n+1) )**2
     return (n+1)/somme
 
+#On veut garder best_pred trié par ordre croissant
+#Exemple best_pred = [tensor([[0.2,0.8],[0.1,0.2,0.7]]),tensor([[0.4,0.6],[0.6,0.35,0.05]])]
+#Exemple best_reward = [0.34,0.45]
+def update_mem_best_pred(log_probs,R,best_pred,best_reward,PRIORITY_QUEUE_PROP,nb_trial):
+    if(len(best_reward)==0):
+        best_reward.append(R)
+        best_pred.append(log_probs)
+        return best_pred,best_reward
+    i=0
+    while(i<len(best_reward) and R > best_reward[i]):
+        i+=1
+    #Si i=0 cela veut dire que notre nouveau model n'est pas meilleurs que le pire des models sauvegardé
+    if(i==0):
+        return best_pred,best_reward
+    i=i-1
+    #On insert le modele au bon endroit
+    best_pred.insert(i,log_probs)
+    best_reward.insert(i,R)
+    #On coupe la liste pour qu'elle fasse que PRIORITY_QUEUE_PROP% de la taille de tout les essais
+    indice_coupe = int(k*PRIORITY_QUEUE_PROP)+1
+    best_pred = best_pred[:indice_coupe]
+    best_reward = best_reward[:indice_coupe]
+    return best_pred,best_reward
+    
+
 
 NUMBER = 8
 dict_params = dict()
@@ -231,12 +270,14 @@ for s in range(NUMBER):
 
 
 
-MAX_ITER = 5000
-HIDDEN_SIZE = 200
+MAX_ITER = 2000
+HIDDEN_SIZE = 20
 NUM_LAYER = 1
 NB_EPOCH = 2
 #Equivalent de m dans la papier
 NB_TRAJECTOIRE_ECHANTILLON = 6
+#On garde en mémoire les 5% des meilleurs trials
+PRIORITY_QUEUE_PROP = 0.01
 
 list_desc=["Number_"+str(i+1) for i in range(NUMBER)]
 controler = ControllerNetwork(list_desc,dict_params,HIDDEN_SIZE,NUM_LAYER)
@@ -266,21 +307,26 @@ controler_optimizer = optim.Adam(controler.parameters(), lr=5e-4)
 #netTester = NetworkTester(NB_EPOCH)
 best_model = None
 Rmax = -99999999
+best_pred = []
+best_reward = []
 
 all_reward = []
 
 somme = None
 for k in range(MAX_ITER):
-    indice_choix_controller,log_probs = controler(torch.tensor([]))
+    indice_choix_controller,log_probs, total_probs = controler(torch.tensor([]))
     if(k%100==0):
         print("Itération ",k,"/",MAX_ITER)
         print("choix controller :",indice_choix_controller)
+    
     networkDesc = []
     for q in range(len(indice_choix_controller)):
         couple = (list_desc[q],int(indice_choix_controller[q].detach().numpy()))
         networkDesc.append(couple)
     #On multiplie la reward par 100 pour avoir un chiffre entre 0 et 100 au lieu de 0 et 1
     R = learning_to_count_reward(indice_choix_controller)
+
+    best_pred, best_reward = update_mem_best_pred(indice_choix_controller,R,best_pred,best_reward,PRIORITY_QUEUE_PROP,k)
 
     all_reward.append(R)
     if(k%100==0):
@@ -295,7 +341,7 @@ for k in range(MAX_ITER):
         R -= (somme/k)
         somme += R 
 
-    update_controler(controler, controler_optimizer, R, log_probs, k , NB_TRAJECTOIRE_ECHANTILLON)
+    update_controler(controler, controler_optimizer, R, log_probs, k , NB_TRAJECTOIRE_ECHANTILLON,best_pred)
 
 #print(netTester.test_score(best_model))
 
