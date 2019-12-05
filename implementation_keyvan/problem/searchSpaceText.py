@@ -1,4 +1,4 @@
-from problem.searchSpace import SearchSpace
+from implementation_keyvan.problem.searchSpace import SearchSpace
 import torch.nn as nn
 import numpy as np
 from collections import namedtuple

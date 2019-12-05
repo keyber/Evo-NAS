@@ -1,9 +1,9 @@
-from agent.agent import Agent
+from implementation_keyvan.agent.agent import Agent
 from collections import deque
 from random import sample
 import sys
 sys.path.append("../problem")
-from problem.searchSpace import SearchSpace
+from implementation_keyvan.problem.searchSpace import SearchSpace
 
 
 class AgentEvo(Agent):

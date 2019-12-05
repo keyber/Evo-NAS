@@ -1,6 +1,6 @@
 import pandas as pd
-from problem.searchSpaceImage import SearchSpaceImage
-from problem.searchSpaceL2C import SearchSpaceL2C
+from implementation_keyvan.problem.searchSpaceImage import SearchSpaceImage
+from implementation_keyvan.problem.searchSpaceL2C import SearchSpaceL2C
 import torchvision.datasets
 import torch.utils
 from torchvision import transforms

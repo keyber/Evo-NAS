@@ -1,9 +1,9 @@
 from collections import namedtuple
-from problem.searchSpace import SearchSpace
+from implementation_keyvan.problem.searchSpace import SearchSpace
 import torch.nn as nn
 from random import random, choice
 import sys
-from problem.architectureNN import ArchitectureNN
+from implementation_keyvan.problem.architectureNN import ArchitectureNN
 
 
 class SearchSpaceImage(SearchSpace):

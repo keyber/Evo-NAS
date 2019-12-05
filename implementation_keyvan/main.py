@@ -1,37 +1,40 @@
-from problem import instances
-from agent.agent import Agent
-from agent.baselineRS import AgentRS
-from agent.baselineEvo import AgentEvo
+from implementation_keyvan.problem import instances
+from implementation_keyvan.agent.agent import Agent
+from implementation_keyvan.agent.baselineRS import AgentRS
+from implementation_keyvan.agent.baselineEvo import AgentEvo
+from implementation_keyvan.agent.rnn_based.nas import AgentNAS
 import numpy as np
 import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
-from problem.searchSpace import SearchSpace
+from implementation_keyvan.problem.searchSpace import SearchSpace
 
 
 def run_agent(space:SearchSpace, agent:Agent, n_iter=10, verbose=0):
     """appelle n_iter fois agent.act et retourne la meilleure architecture trouvée"""
     best_a, best_v = None, -np.inf
+    score_sum = 0
     
     archi = agent.act(last_reward=None)
     
     s = len(str(n_iter-1))
     
     if verbose:
-        print("iter".ljust(s+2), "val    archi")
+        print("iter".ljust(s+2), " val    moy     archi")
     
     
-    for i in range(n_iter):
+    for i in range(1, n_iter+1):
         score = space.score(archi)
+        score_sum += score
         
         if score > best_v:
             best_v = score
             best_a = archi
             if verbose==1:
-                print(str(i).rjust(s, "0"), "  %.2f  "%score, archi)
+                print(str(i).rjust(s, "0"), "  %.2f   %.2f   "%(score, score_sum/i), archi)
                 
         if verbose==2:
-            print(str(i).rjust(s, "0"), "  %.2f  "%score, archi)
+            print(str(i).rjust(s, "0"), "  %.2f   %.2f   "%(score, score_sum/i), archi)
         
         archi = agent.act(last_reward=score)
         
@@ -40,21 +43,21 @@ def run_agent(space:SearchSpace, agent:Agent, n_iter=10, verbose=0):
 
 
 def main_learn_to_count():
-    print("\n\n\n Learn To Count")
-    space = instances.learn_to_count(space_size=10)
+    space = instances.learn_to_count(space_size=8)
     
     agents = [
-        AgentRS(space),
-        AgentEvo(space, min_p=50, max_p=100, s=20),
+        AgentNAS(space, emb_size=50, hid_size=50),
+        # AgentRS(space),
+        # AgentEvo(space, min_p=100, max_p=100, s=20),
     ]
     
     for agent in agents:
         print("\n\n\nAgent", agent.__class__)
         run_agent(space, agent, n_iter=100000, verbose=1)
+        break
 
 
 def main_cifar10():
-    print("\n\n\nCIFAR 10")
     # entraînement très réduit juste pour voir le code tourner
     space = instances.cifar10(batch_size=3, reduced=True, train_params={"n_epochs":2, "max_iter":2})
     
@@ -72,4 +75,4 @@ def main_cifar10():
         print("best val", best_val)
 
 main_learn_to_count()
-main_cifar10()
+# main_cifar10()

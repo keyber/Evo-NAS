@@ -1,7 +1,7 @@
-from agent.agent import Agent
+from implementation_keyvan.agent.agent import Agent
 import sys
 sys.path.append("../problem")
-from problem.searchSpace import SearchSpace
+from implementation_keyvan.problem.searchSpace import SearchSpace
 
 
 class AgentRS(Agent):
