@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from math import *
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
 
 
 class ConvNetwork(nn.Module):
@@ -64,8 +66,9 @@ class ControllerNetwork(nn.Module):
         self.list_embed_weights = nn.ModuleList(self.list_embed_weights)
         self.soft = nn.Softmax(dim=0)
 
-
-    def forward(self, inutile):
+    #which_to_use : -1 si on demande de sampler selon le réseau et l'indice utilisé sinon
+    #exemple : which_to_use = [-1,3,2,3,-1,-1]
+    def forward(self, which_to_use):
         h = torch.zeros([self.num_layers, 1, self.hidden_size],requires_grad=True)
         c = torch.zeros([self.num_layers, 1, self.hidden_size],requires_grad=True)
         x = torch.zeros([1,1,1],requires_grad=True)
@@ -78,7 +81,7 @@ class ControllerNetwork(nn.Module):
         #print("requires grad des concat")
         #print(all_decision.requires_grad)
         #On fait N passage ou seq_len est égale à 1 pour chaqu'un car c'est la sortie que l'on remet dans le réseaux
-        for embed in self.list_embed_weights:
+        for indice,embed in enumerate(self.list_embed_weights):
             _, (h_n, c_n) = self.rnn(x, (h, c))
             h = h_n[-1,0]
             #c = c_n[-1,0]
@@ -98,7 +101,9 @@ class ControllerNetwork(nn.Module):
             #proba = decision.max(0)[0].float()
             #indice_max = decision.max(0)[1].float()
             #print("proba requires grad",proba.requires_grad)
-            
+            if(which_to_use[indice] != -1 and which_to_use[indice] != -1.0 ):
+                #print(which_to_use[indice])
+                indice_max = torch.tensor(which_to_use[indice])
             all_decision = torch.cat((all_decision, indice_max.unsqueeze(0)))
             all_probs = torch.cat((all_probs,proba.unsqueeze(0)))
             x = indice_max
@@ -107,7 +112,26 @@ class ControllerNetwork(nn.Module):
             c = c_n
         #print("allprobs requires grad",all_probs.requires_grad)
         return all_decision.int(),all_probs,total_probs
+        
+    def mutate_network(self,description_actuelle):
+        #Muter la description
+        numero_of_parametter = len(description_actuelle)
+        for choix_parammettre in range(numero_of_parametter):
+            alea = np.random.random()
+            if(alea<0.3):
+                description_actuelle[choix_parammettre] = -1
+        new_desc, log_probs, total_probs  = self.forward(description_actuelle.float().detach().numpy())
+        return new_desc, log_probs
 
+    def best_in_sample(self,sample):
+        #print(sample)
+        maxi = -np.inf
+        best_model = None
+        for model in sample:
+            if(model[1]>maxi):
+                maxi = model[1]
+                best_model=model
+        return best_model
 
 class NetworkTester():
     def __init__(self,nb_epoch):
@@ -199,23 +223,25 @@ def update_controler(controler, optimizer, reward, log_probs,epoch,nb_traj_echan
     
     #loss lié a la priority queue
     criterion = nn.CrossEntropyLoss()
-    label = best_pred
+    label = best_pred.copy()
     list_loss_PQT = []
     for l in label:
-        _,_,total_probs = controler(torch.tensor([]))
+        _,_,total_probs = controler(-np.ones(nb_hyperparams))
         l = l.long()
+        #print(total_probs)
+        #print(l)
         list_loss_PQT.append(criterion(total_probs,l))
     PQT_loss = torch.stack(list_loss_PQT).sum()
 
     #loss lié a l'entropy pour avoir plus d'exploration
     #PAS SUR DU TOUT POUR çA
-    _,_,total_probs = controler(torch.tensor([]))
+    _,_,total_probs = controler(-np.ones(nb_hyperparams))
     criterion_entrop = HLoss()
     loss_entropy = criterion_entrop(total_probs)
 
 
     #loss total
-    total_loss = lambda_pg*policy_gradient_loss + lambda_PQ*PQT_loss + lambda_entrop*loss_entropy
+    total_loss = lambda_pg*policy_gradient_loss
     total_loss.backward()
 
 
@@ -230,6 +256,7 @@ def learning_to_count_reward(liste_pred):
     liste_pred = list(liste_pred.detach().numpy()) 
     liste_pred = [q+1 for q in liste_pred]
     #print(liste_pred)
+    #print(liste_pred)
     n = len(liste_pred)
     somme = liste_pred[0]**2
     for k in range(len(liste_pred)-1):
@@ -243,7 +270,7 @@ def learning_to_count_reward(liste_pred):
 def update_mem_best_pred(log_probs,R,best_pred,best_reward,PRIORITY_QUEUE_PROP,nb_trial):
     if(len(best_reward)==0):
         best_reward.append(R)
-        best_pred.append(log_probs)
+        best_pred.append(log_probs.clone())
         return best_pred,best_reward
     i=0
     while(i<len(best_reward) and R > best_reward[i]):
@@ -253,7 +280,7 @@ def update_mem_best_pred(log_probs,R,best_pred,best_reward,PRIORITY_QUEUE_PROP,n
         return best_pred,best_reward
     i=i-1
     #On insert le modele au bon endroit
-    best_pred.insert(i,log_probs)
+    best_pred.insert(i,log_probs.clone())
     best_reward.insert(i,R)
     #On coupe la liste pour qu'elle fasse que PRIORITY_QUEUE_PROP% de la taille de tout les essais
     indice_coupe = int(k*PRIORITY_QUEUE_PROP)+1
@@ -269,8 +296,8 @@ for s in range(NUMBER):
     dict_params["Number_"+str(s+1)] = list(range(NUMBER))
 
 
-
-MAX_ITER = 2000
+#Nombre de génération/répétition
+MAX_ITER = 4500
 HIDDEN_SIZE = 20
 NUM_LAYER = 1
 NB_EPOCH = 2
@@ -313,21 +340,59 @@ best_reward = []
 all_reward = []
 
 somme = None
-for k in range(MAX_ITER):
-    indice_choix_controller,log_probs, total_probs = controler(torch.tensor([]))
+P = 500
+S = 50
+
+#netTester = NetworkTester(NB_EPOCH)
+best_model = None
+Rmax = -99999999
+
+all_reward = []
+
+population = []
+all_model = []
+
+k=0
+
+while len(population) < P:
+    #On genere tout selon le réseaux donc -1 partout
+    which_to_use = -np.ones(len(list_desc))
+    desc, log_probs, _ = controler.forward(which_to_use)
+    R = learning_to_count_reward(desc)
+    writer.add_scalars('Reward', {'Reward_EVO-NAS-REINFORCE':R}, k)
+    #Partie RL
+    #print(desc)
+    best_pred, best_reward = update_mem_best_pred(desc,R,best_pred,best_reward,PRIORITY_QUEUE_PROP,k)
+    all_reward.append(R)
     if(k%100==0):
-        print("Itération ",k,"/",MAX_ITER)
-        print("choix controller :",indice_choix_controller)
+        print("Reward :",R)
+    if(R>Rmax):
+        #best_model = model_to_test
+        Rmax = R
     
-    networkDesc = []
-    for q in range(len(indice_choix_controller)):
-        couple = (list_desc[q],int(indice_choix_controller[q].detach().numpy()))
-        networkDesc.append(couple)
-    #On multiplie la reward par 100 pour avoir un chiffre entre 0 et 100 au lieu de 0 et 1
-    R = learning_to_count_reward(indice_choix_controller)
+    all_reward.append(R)
+    model = (desc,R)
+    population.append(model)
+    k+=1
 
-    best_pred, best_reward = update_mem_best_pred(indice_choix_controller,R,best_pred,best_reward,PRIORITY_QUEUE_PROP,k)
+while len(all_model) < MAX_ITER:
+    sample = []
+    while len(sample) < S:
+        indice_candidat = np.random.randint(0,len(population),1)[0]
+        candidate = population[indice_candidat]
+        sample.append(candidate)
+    parent = controler.best_in_sample(sample)
+    child_desc, log_probs = controler.mutate_network(parent[0])
+    if(k%100==0):
+        print("Itération ",k,"/",MAX_ITER+P)
+        print("choix controller :",child_desc)
+    #print(child_desc)
+    R = learning_to_count_reward(child_desc)
+    writer.add_scalars('Reward', {'Reward_EVO-NAS-REINFORCE':R}, k)
+    #Partie RL
+    best_pred, best_reward = update_mem_best_pred(child_desc,R,best_pred,best_reward,PRIORITY_QUEUE_PROP,k)
 
+    
     all_reward.append(R)
     if(k%100==0):
         print("Reward :",R)
@@ -341,12 +406,17 @@ for k in range(MAX_ITER):
         R -= (somme/k)
         somme += R 
 
+    #print(best_pred)
     update_controler(controler, controler_optimizer, R, log_probs, k , NB_TRAJECTOIRE_ECHANTILLON,best_pred)
 
-#print(netTester.test_score(best_model))
 
-#plt.plot(all_reward)
-#plt.show()
+    child = (child_desc,R)
+    population.append(child)
+    all_model.append(child)
+    #On enleve le plus vieux modele
+    population = population[1:]
+    k+=1
+
 
 filtre_passe_bas = []
 RANGE = 10
