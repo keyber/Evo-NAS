@@ -4,17 +4,20 @@ import csv
 import matplotlib.pyplot as plt
 
 from stateSpace import StateSpace
-from controller import Controller
+from controller import Controller, NasLSTM
+from torch import nn
+from torch import optim
 
-SPACE_SIZE = 10
-MAX_TRIALS = 300 # maximum number of models generated
-EXPLORATION = 0.8  # high exploration for the first 1000 steps
+SPACE_SIZE = 3
+MAX_TRIALS = 600 # maximum number of models generated
+EXPLORATION = 0.0  # high exploration for the first 1000 steps
 REGULARIZATION = 1e-3  # regularization strength
-HIDDEN_UNITS = 10 # number of hidden units on each layer
-EMBEDDING_DIM = 20  # dimension of the embeddings for each state
+HIDDEN_UNITS = 200 # number of hidden units on each layer
+EMBEDDING_DIM = 200  # dimension of the embeddings for each state
 ACCURACY_BETA = 0.8  # beta value for the moving average of the accuracy
 CLIP_REWARDS = 0.0  # clip rewards in the [-0.05, 0.05] range
 UPDATE_STEP = 6
+LEARNING_RATE = 1e-3
 
 
 def scoreL2C(archi, n):
@@ -50,21 +53,56 @@ def main_training():
     previous_acc = 0.0
     all_rewards = []
 
-    controller = Controller(1, state_space, hidden_units=HIDDEN_UNITS, exploration=0.1, learning_rate=1e-2)
+    controller = Controller(1, state_space, hidden_units=HIDDEN_UNITS, exploration=EXPLORATION, learning_rate=LEARNING_RATE)
 
+    num_distinct_states = np.sum([state_space[i]['size'] for i in range(state_space.size)])
+
+    policy_network = NasLSTM(num_embeddings=num_distinct_states, embedding_dim=EMBEDDING_DIM,
+                             hidden_dim=HIDDEN_UNITS,
+                             state_space=state_space,
+                             num_layers=1)
+
+    for name, param in policy_network.named_parameters():
+        if "nas_cell_layer" in name or "hidden2state" in name:
+            nn.init.uniform_(param, a=-0.08, b=0.08)
+
+    policy_optim = optim.Adam(policy_network.parameters(), lr=1e-2)
+    policy_network.float()
+    policy_network.train()
 
     for trial in range(MAX_TRIALS):
-        actions, prob_actions = controller.get_action()
+        # ANCIENNE VERSION
+        # actions, prob_actions = controller.get_action()
+
+        if np.random.random() < controller.exploration:
+            # print("Generating random action to explore")
+            actions = []
+            prob_actions = []
+
+            for i in range(state_space.size):
+                state_ = state_space[i]
+                size = state_['size']
+                prob = torch.zeros(size)
+
+                ind = np.random.choice(size, size=1)[0]
+                prob[ind] = 1
+                actions.append(ind)
+                prob_actions.append(prob)
+
+            actions = torch.tensor(actions)
+            prob_actions = torch.stack(prob_actions)
+            prob_actions.requires_grad = True
+        else:
+            actions, prob_actions = policy_network()
 
         # print the action probabilities
         #state_space.print_actions(prob_actions.tolist())
-
-        # print("Predicted actions : ", actions.tolist())
 
         reward = scoreL2C(actions.tolist(), SPACE_SIZE)
         all_rewards.append(reward)
 
         if trial % 50 == 0:
+            print("Predicted actions : ", actions.tolist())
             print("Reward : ", reward)
 
         # actions and states are equivalent, save the state and reward
@@ -73,7 +111,7 @@ def main_training():
         controller.store_rollout(state, reward, prob_state)
 
         # train the controller on the saved state and the discounted rewards
-        loss = controller.update_policy(reward)
+        loss = controller.update_policy(reward, policy_optim)
 
         # print("Reward : ", reward)
         # print("Trial %d: Controller loss : %0.6f" % (trial + 1, loss))
