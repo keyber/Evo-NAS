@@ -15,7 +15,7 @@ def run_agent(space:SearchSpace, agent:Agent, n_iter=10, verbose=0):
     
     archi = agent.act(last_reward=None)
     
-    s = len(str(n_iter))
+    s = len(str(n_iter-1))
     
     if verbose:
         print("iter".ljust(s+2), "val    archi")

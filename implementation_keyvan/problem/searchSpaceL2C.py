@@ -1,5 +1,6 @@
 from problem.searchSpace import SearchSpace
 import numpy as np
+from random import random
 
 
 class SearchSpaceL2C(SearchSpace):
@@ -25,9 +26,19 @@ class SearchSpaceL2C(SearchSpace):
     def mutate(self, archi, r=.5, **kwargs):
         values = archi.copy()
         ind = np.random.random(self.space) < r
-        values[ind] = np.random.randint(1, self.space+1, len(values[ind]))
+        values[ind] = np.random.randint(1, self.space + 1, len(values[ind]))
     
         return values
+    
+    def rnn_mutate(self, archi, controller, r=.5, **kwargs):
+        result = []
+        h = controller.rnn(controller.BEGIN)
+        for i in range(len(archi)):
+            choice = controller.classifier(h) if random() < r  else archi[i]
+            result.append(choice) 
+            h = controller.rnn(choice)
+                
+        return np.array(result)
     
     def random_sample(self, **kwargs):
         """Retourne une architecture aléatoire de l'espace"""

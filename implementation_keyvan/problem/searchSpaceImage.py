@@ -85,7 +85,7 @@ class SearchSpaceImage(SearchSpace):
                                    for (k, v) in self.space.loc.items()})
             else:
                 loc_values.append({k: choice(v) for (k, v) in self.space.loc.items()})
-        
+    
         net = self._create_model(gbl_values, loc_values)
         return ArchitectureNN(gbl_values, loc_values, net, **kwargs)
 
